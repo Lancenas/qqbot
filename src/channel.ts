@@ -25,7 +25,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   },
   reload: { configPrefixes: ["channels.qqbot"] },
   // CLI onboarding wizard
-  onboarding: qqbotOnboardingAdapter as any,
+  onboarding: qqbotOnboardingAdapter,
   config: {
     listAccountIds: (cfg) => listQQBotAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveQQBotAccount(cfg, accountId),

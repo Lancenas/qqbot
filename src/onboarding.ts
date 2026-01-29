@@ -1,12 +1,20 @@
 /**
  * QQBot CLI Onboarding Adapter
+ * 
+ * 提供 moltbot onboard 命令的交互式配置支持
  */
-import type { ResolvedQQBotAccount } from "./types.js";
+import type { 
+  ChannelOnboardingAdapter,
+  ChannelOnboardingStatus,
+  ChannelOnboardingStatusContext,
+  ChannelOnboardingConfigureContext,
+  ChannelOnboardingResult,
+} from "clawdbot/plugin-sdk";
 import { listQQBotAccountIds, resolveQQBotAccount } from "./config.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
-// 类型定义（从 moltbot 导入会有循环依赖问题）
+// 内部类型（避免循环依赖）
 interface MoltbotConfig {
   channels?: {
     qqbot?: QQBotChannelConfig;
@@ -30,78 +38,6 @@ interface QQBotChannelConfig {
   }>;
 }
 
-interface WizardPrompter {
-  note: (message: string, title?: string) => Promise<void>;
-  text: (options: {
-    message: string;
-    placeholder?: string;
-    initialValue?: string;
-    validate?: (value: string | undefined) => string | undefined;
-  }) => Promise<string>;
-  confirm: (options: {
-    message: string;
-    initialValue?: boolean;
-  }) => Promise<boolean>;
-  select: <T>(options: {
-    message: string;
-    options: Array<{ value: T; label: string; hint?: string }>;
-    initialValue?: T;
-  }) => Promise<T>;
-}
-
-interface ChannelOnboardingStatus {
-  channel: string;
-  configured: boolean;
-  statusLines: string[];
-  selectionHint?: string;
-  quickstartScore?: number;
-}
-
-interface ChannelOnboardingStatusContext {
-  cfg: MoltbotConfig;
-  options?: unknown;
-  accountOverrides: Partial<Record<string, string>>;
-}
-
-interface ChannelOnboardingConfigureContext {
-  cfg: MoltbotConfig;
-  runtime: unknown;
-  prompter: WizardPrompter;
-  options?: unknown;
-  accountOverrides: Partial<Record<string, string>>;
-  shouldPromptAccountIds: boolean;
-  forceAllowFrom: boolean;
-}
-
-interface ChannelOnboardingResult {
-  cfg: MoltbotConfig;
-  accountId?: string;
-}
-
-interface ChannelOnboardingAdapter {
-  channel: string;
-  getStatus: (ctx: ChannelOnboardingStatusContext) => Promise<ChannelOnboardingStatus>;
-  configure: (ctx: ChannelOnboardingConfigureContext) => Promise<ChannelOnboardingResult>;
-  disable?: (cfg: MoltbotConfig) => MoltbotConfig;
-}
-
-/**
- * 显示 QQBot 配置帮助
- */
-async function noteQQBotHelp(prompter: WizardPrompter): Promise<void> {
-  await prompter.note(
-    [
-      "1) 打开 QQ 开放平台: https://q.qq.com/",
-      "2) 创建机器人应用，获取 AppID 和 ClientSecret",
-      "3) 在「开发设置」中添加沙箱成员（测试阶段）",
-      "4) 你也可以设置环境变量 QQBOT_APP_ID 和 QQBOT_CLIENT_SECRET",
-      "",
-      "文档: https://bot.q.qq.com/wiki/",
-    ].join("\n"),
-    "QQ Bot 配置",
-  );
-}
-
 /**
  * 解析默认账户 ID
  */
@@ -114,16 +50,17 @@ function resolveDefaultQQBotAccountId(cfg: MoltbotConfig): string {
  * QQBot Onboarding Adapter
  */
 export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
-  channel: "qqbot",
+  channel: "qqbot" as any,
 
-  getStatus: async ({ cfg }) => {
-    const configured = listQQBotAccountIds(cfg).some((accountId) => {
-      const account = resolveQQBotAccount(cfg, accountId);
+  getStatus: async (ctx: ChannelOnboardingStatusContext): Promise<ChannelOnboardingStatus> => {
+    const { cfg } = ctx;
+    const configured = listQQBotAccountIds(cfg as MoltbotConfig).some((accountId) => {
+      const account = resolveQQBotAccount(cfg as MoltbotConfig, accountId);
       return Boolean(account.appId && account.clientSecret);
     });
 
     return {
-      channel: "qqbot",
+      channel: "qqbot" as any,
       configured,
       statusLines: [`QQ Bot: ${configured ? "已配置" : "需要 AppID 和 ClientSecret"}`],
       selectionHint: configured ? "已配置" : "支持 QQ 群聊和私聊",
@@ -131,14 +68,17 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
 
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
-    const qqbotOverride = accountOverrides.qqbot?.trim();
-    const defaultAccountId = resolveDefaultQQBotAccountId(cfg);
+  configure: async (ctx: ChannelOnboardingConfigureContext): Promise<ChannelOnboardingResult> => {
+    const { cfg, prompter, accountOverrides, shouldPromptAccountIds } = ctx;
+    const moltbotCfg = cfg as MoltbotConfig;
+    
+    const qqbotOverride = (accountOverrides as Record<string, string>).qqbot?.trim();
+    const defaultAccountId = resolveDefaultQQBotAccountId(moltbotCfg);
     let accountId = qqbotOverride ?? defaultAccountId;
 
     // 是否需要提示选择账户
     if (shouldPromptAccountIds && !qqbotOverride) {
-      const existingIds = listQQBotAccountIds(cfg);
+      const existingIds = listQQBotAccountIds(moltbotCfg);
       if (existingIds.length > 1) {
         accountId = await prompter.select({
           message: "选择 QQBot 账户",
@@ -151,7 +91,7 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     }
 
-    let next = cfg;
+    let next = moltbotCfg;
     const resolvedAccount = resolveQQBotAccount(next, accountId);
     const accountConfigured = Boolean(resolvedAccount.appId && resolvedAccount.clientSecret);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -165,7 +105,17 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
 
     // 显示帮助
     if (!accountConfigured) {
-      await noteQQBotHelp(prompter);
+      await prompter.note(
+        [
+          "1) 打开 QQ 开放平台: https://q.qq.com/",
+          "2) 创建机器人应用，获取 AppID 和 ClientSecret",
+          "3) 在「开发设置」中添加沙箱成员（测试阶段）",
+          "4) 你也可以设置环境变量 QQBOT_APP_ID 和 QQBOT_CLIENT_SECRET",
+          "",
+          "文档: https://bot.q.qq.com/wiki/",
+        ].join("\n"),
+        "QQ Bot 配置",
+      );
     }
 
     // 检测环境变量
@@ -283,14 +233,14 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     }
 
-    return { cfg: next, accountId };
+    return { cfg: next as any, accountId };
   },
 
   disable: (cfg) => ({
     ...cfg,
     channels: {
-      ...cfg.channels,
-      qqbot: { ...cfg.channels?.qqbot, enabled: false },
+      ...(cfg as MoltbotConfig).channels,
+      qqbot: { ...(cfg as MoltbotConfig).channels?.qqbot, enabled: false },
     },
-  }),
+  }) as any,
 };
